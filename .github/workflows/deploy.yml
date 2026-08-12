@@ -1,0 +1,30 @@
+name: Deploy tld-hunter
+
+# Manuální trigger – push do main SÁM nedeployuje (deploy = vědomá akce člověka).
+# Spuštění: tlačítko "Run workflow" v Actions, nebo: gh workflow run deploy.yml --repo petrkyncl/tld-hunter
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-tld-hunter
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy přes SSH na VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /var/www/tld-hunter
+            git fetch origin
+            git pull --ff-only origin main
+            npm ci
+            npm run build
+            pm2 reload tld-hunter --update-env
+            echo "✓ deploy hotov na commitu $(git rev-parse --short HEAD)"
