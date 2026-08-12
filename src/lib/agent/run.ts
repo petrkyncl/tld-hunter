@@ -96,6 +96,34 @@ Your text between tool calls is what the user reads while waiting. Say what you 
 Deliver what was asked at the scope intended. If the brief is too narrow to yield anything good, say so plainly rather than lowering your bar and filling the shortlist with weak names.`;
 }
 
+/**
+ * The API allows four cache breakpoints per request. One lives on the system
+ * prompt, so the transcript may carry at most three — and a loop that marks a
+ * fresh block every turn without clearing the old ones hits the ceiling after
+ * four turns and 400s. Keep a rolling window of the newest marks instead: the
+ * newest breakpoint's prefix already covers everything the older ones did.
+ */
+function rollBreakpoints(messages: Anthropic.Beta.BetaMessageParam[], keep: number) {
+  const marked: Anthropic.Beta.BetaToolResultBlockParam[] = [];
+
+  for (const message of messages) {
+    if (message.role !== "user" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (
+        typeof block === "object" &&
+        block.type === "tool_result" &&
+        (block as Anthropic.Beta.BetaToolResultBlockParam).cache_control
+      ) {
+        marked.push(block as Anthropic.Beta.BetaToolResultBlockParam);
+      }
+    }
+  }
+
+  for (const block of marked.slice(0, Math.max(0, marked.length - keep))) {
+    delete block.cache_control;
+  }
+}
+
 function accumulate(usage: Usage, u: Anthropic.Beta.BetaUsage | undefined): Usage {
   if (!u) return usage;
   const input = usage.input + (u.input_tokens ?? 0);
@@ -246,8 +274,10 @@ export async function runAgent(
       }),
     );
 
-    // Second breakpoint on the growing transcript, so each turn re-reads the
-    // whole conversation from cache instead of paying full input price.
+    // A breakpoint on the growing transcript, so each turn re-reads the whole
+    // conversation from cache instead of paying full input price. Retire the
+    // older marks first — system already holds one of the four allowed.
+    rollBreakpoints(messages, 1);
     const last = results[results.length - 1] as Anthropic.Beta.BetaToolResultBlockParam;
     last.cache_control = { type: "ephemeral" };
 
