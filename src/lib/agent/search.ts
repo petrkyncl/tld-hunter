@@ -1,6 +1,7 @@
 import { lookupNs } from "@/lib/dns";
 import { detectMarket } from "@/lib/parking";
 import { pooled } from "@/lib/pool";
+import { lookupListing } from "@/lib/market";
 import { authoritative, buildTargets, describeTld, normalizeQuery } from "@/lib/scan";
 import type { CategoryId } from "@/lib/categories";
 
@@ -151,9 +152,17 @@ export async function sweepName(
 export async function checkDomains(
   domains: string[],
   signal?: AbortSignal,
-): Promise<Array<{ domain: string; status: string; price?: number; renew?: number }>> {
+): Promise<
+  Array<{ domain: string; status: string; price?: number; renew?: number; askUsd?: number }>
+> {
   const { pricing } = await buildTargets();
-  const out: Array<{ domain: string; status: string; price?: number; renew?: number }> = [];
+  const out: Array<{
+    domain: string;
+    status: string;
+    price?: number;
+    renew?: number;
+    askUsd?: number;
+  }> = [];
 
   const valid = domains
     .map((d) => d.trim().toLowerCase().replace(/^\./, ""))
@@ -167,7 +176,18 @@ export async function checkDomains(
       const tld = domain.split(".").slice(1).join(".");
       const dns = await lookupNs(domain, signal);
       if (dns.verdict === "delegated") {
-        const market = detectMarket(domain, dns.ns);
+        // Taken is not the end of the story — the marketplace knows the asking
+        // price even when the nameservers give nothing away.
+        const [market, listing] = [
+          detectMarket(domain, dns.ns),
+          await lookupListing(domain, signal),
+        ];
+        if (listing.listed) {
+          return {
+            status: listing.priceUsd ? "for sale" : "for sale (make an offer)",
+            askUsd: listing.priceUsd ?? listing.minOfferUsd,
+          };
+        }
         return { status: market ? `for sale (${market.name})` : "taken" };
       }
       const verdict = await authoritative(domain, tld, signal);
@@ -181,6 +201,7 @@ export async function checkDomains(
         status: res.status,
         price: price?.registration,
         renew: price?.renewal,
+        askUsd: res.askUsd,
       });
     },
     signal,

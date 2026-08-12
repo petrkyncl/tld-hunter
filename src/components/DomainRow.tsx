@@ -29,11 +29,14 @@ function DomainRow({
   r,
   currency,
   rates,
+  ask,
   onOpen,
 }: {
   r: TldResult;
   currency: Currency;
   rates: Rates | null;
+  /** Aftermarket asking price, once looked up. */
+  ask?: string;
   onOpen: (r: TldResult) => void;
 }) {
   const first = formatPrice(r.price, currency, rates);
@@ -81,7 +84,12 @@ function DomainRow({
         </span>
 
         <span className="hidden text-right font-mono leading-tight sm:block">
-          {first ? (
+          {ask ? (
+            <>
+              <span className="text-sale">{ask}</span>
+              <span className="block text-[10px] text-muted">aftermarket</span>
+            </>
+          ) : first ? (
             <>
               <span className={r.status === "free" ? "text-fg" : "text-muted"}>{first}</span>
               <span className="block text-[10px] text-muted">

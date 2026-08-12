@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DomainDrawer from "./DomainDrawer";
 import DomainRow from "./DomainRow";
 import { formatMonthly, formatPrice } from "./money";
+import { askLabel, useListing } from "./useListing";
+import type { Listing } from "@/lib/market";
 import { CATEGORIES, KIND_LABEL, type CategoryId, type TldKind } from "@/lib/categories";
 import { CURRENCIES, type Currency, type Rates } from "@/lib/fx";
 import { api } from "@/lib/basePath";
@@ -60,6 +62,8 @@ export default function DomainSearch({
   const [verifyDone, setVerifyDone] = useState(0);
   const [selected, setSelected] = useState<TldResult | null>(null);
   const [shown, setShown] = useState(PAGE);
+  const [asks, setAsks] = useState<Map<string, string>>(new Map());
+  const [pricing, setPricing] = useState(false);
 
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("smart");
@@ -260,6 +264,40 @@ export default function DomainSearch({
     }
     return best;
   }, [visible]);
+
+  /** Ask the marketplace what the visible taken names actually cost. */
+  const loadAsks = useCallback(async () => {
+    const targets = visible
+      .filter((r) => (r.status === "forsale" || r.status === "taken") && !asks.has(r.domain))
+      .slice(0, 25)
+      .map((r) => r.domain);
+    if (!targets.length) return;
+
+    setPricing(true);
+    try {
+      const res = await fetch(api("/api/market"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ domains: targets }),
+      });
+      const json = (await res.json()) as { listings?: Listing[] };
+      setAsks((prev) => {
+        const next = new Map(prev);
+        for (const l of json.listings ?? []) {
+          next.set(l.domain, l.listed ? askLabel(l) : "not listed");
+        }
+        return next;
+      });
+    } catch {
+      setError("Could not reach the aftermarket.");
+    } finally {
+      setPricing(false);
+    }
+  }, [visible, asks]);
+
+  const askable = visible.filter(
+    (r) => (r.status === "forsale" || r.status === "taken") && !asks.has(r.domain),
+  ).length;
 
   const exportCsv = useCallback(() => {
     const head = "domain;status;confidence;price_usd;renew_usd;kind;categories;marketplace\n";
@@ -491,13 +529,23 @@ export default function DomainSearch({
             latin only
           </label>
 
-          <button
-            onClick={exportCsv}
-            disabled={!visible.length}
-            className="ml-auto rounded-md border border-edge bg-panel px-2.5 py-1 text-muted transition hover:text-fg disabled:opacity-40"
-          >
-            CSV
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={loadAsks}
+              disabled={pricing || !askable}
+              className="rounded-md border border-sale/40 bg-sale/10 px-2.5 py-1 text-sale transition hover:bg-sale/20 disabled:opacity-40"
+              title="Asks Afternic what the taken names on screen are listed for"
+            >
+              {pricing ? "Asking…" : `Aftermarket prices (${Math.min(askable, 25)})`}
+            </button>
+            <button
+              onClick={exportCsv}
+              disabled={!visible.length}
+              className="rounded-md border border-edge bg-panel px-2.5 py-1 text-muted transition hover:text-fg disabled:opacity-40"
+            >
+              CSV
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -548,7 +596,14 @@ export default function DomainSearch({
         <>
           <ul className="scroll-slim mt-1 max-h-[65vh] overflow-y-auto rounded-2xl border border-edge bg-panel/60">
             {visible.slice(0, shown).map((r) => (
-              <DomainRow key={r.tld} r={r} currency={currency} rates={rates} onOpen={setSelected} />
+              <DomainRow
+                key={r.tld}
+                r={r}
+                currency={currency}
+                rates={rates}
+                ask={asks.get(r.domain) === "not listed" ? undefined : asks.get(r.domain)}
+                onOpen={setSelected}
+              />
             ))}
             {!visible.length && (
               <li className="px-4 py-10 text-center text-sm text-muted">
@@ -616,6 +671,12 @@ function FocusCard({
   onOpen: () => void;
 }) {
   const v = VERDICT[r.status];
+  // A "taken" name is often quietly on sale — the marketplace knows even when
+  // the nameservers give nothing away.
+  const { listing, loading: askLoading } = useListing(
+    r.domain,
+    r.status === "taken" || r.status === "forsale",
+  );
   const first = formatPrice(r.price, currency, rates);
   const renewal = formatPrice(r.renew, currency, rates);
   const monthly = formatMonthly(r.renew ?? r.price, currency, rates);
@@ -629,7 +690,7 @@ function FocusCard({
             <span className="text-fg">.{r.tldUnicode}</span>
           </p>
           <p className={`mt-1 text-sm font-medium ${v.tone}`}>
-            {v.text}
+            {listing?.listed && r.status === "taken" ? "This one is taken — but it is for sale" : v.text}
             {r.confidence === "likely" && r.status !== "pending" && r.status !== "unknown" && (
               <span className="ml-2 text-xs font-normal text-muted">
                 (DNS says so, still confirming with the registry)
@@ -676,7 +737,35 @@ function FocusCard({
         </div>
       </div>
 
-      {r.status !== "free" && (
+      {(askLoading || listing?.listed) && (
+        <p className="mt-3 text-sm">
+          {askLoading ? (
+            <span className="text-muted">Checking the aftermarket…</span>
+          ) : (
+            listing?.listed && (
+              <>
+                <span className="text-sale">Asking {askLabel(listing)}</span>
+                {listing.minOfferUsd && listing.priceUsd && (
+                  <span className="text-muted">
+                    {" "}
+                    · offers from ${listing.minOfferUsd.toLocaleString("en-US")}
+                  </span>
+                )}
+                <a
+                  href={listing.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="ml-2 text-xs text-brand hover:underline"
+                >
+                  view listing ↗
+                </a>
+              </>
+            )
+          )}
+        </p>
+      )}
+
+      {r.status !== "free" && !listing?.listed && (
         <p className="mt-3 text-xs text-muted">
           Everything else for <span className="font-mono">{r.domainUnicode.split(".")[0]}</span> is
           below — {r.status === "forsale"

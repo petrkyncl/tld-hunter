@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AuditPanel from "./AuditPanel";
 import { formatMonthly, formatPrice } from "./money";
+import { askLabel, useListing } from "./useListing";
 import { KIND_LABEL } from "@/lib/categories";
 import { api } from "@/lib/basePath";
 import type { Currency, Rates } from "@/lib/fx";
@@ -70,6 +71,11 @@ export default function DomainDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const { listing, loading: askLoading } = useListing(
+    r.domain,
+    r.status === "taken" || r.status === "forsale",
+  );
+
   const meta = STATUS_META[r.status];
   const price = formatPrice(r.price, currency, rates);
   const renew = formatPrice(r.renew, currency, rates);
@@ -130,7 +136,22 @@ export default function DomainDrawer({
               Register at Porkbun ↗
             </a>
           )}
-          {r.market && (
+          {listing?.listed && (
+            <a
+              href={listing.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="rounded-md border border-sale/40 bg-sale/10 px-3 py-1.5 text-xs font-medium text-sale transition hover:bg-sale/20"
+            >
+              For sale · {askLabel(listing)} ↗
+            </a>
+          )}
+          {askLoading && (
+            <span className="rounded-md border border-edge px-3 py-1.5 text-xs text-muted">
+              Checking aftermarket…
+            </span>
+          )}
+          {r.market && !listing?.listed && (
             <a
               href={r.market.url}
               target="_blank"
