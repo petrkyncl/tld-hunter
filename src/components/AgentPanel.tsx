@@ -18,6 +18,8 @@ const DEPTHS: Array<{ id: Depth; label: string; note: string }> = [
   { id: "deep", label: "Deep", note: "~$0.80 · up to ten minutes" },
 ];
 
+const CODE_KEY = "tldhunter.agentCode";
+
 const TOOL_LABEL: Record<string, string> = {
   sweep_name: "Sweeping",
   check_domains: "Checking",
@@ -48,6 +50,8 @@ export default function AgentPanel({
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState<string | null>(null);
   const [showThinking, setShowThinking] = useState(true);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [code, setCode] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<LogItem[]>([]);
@@ -95,9 +99,11 @@ export default function AgentPanel({
     flushRef.current = window.setInterval(() => setLog([...logRef.current]), 140);
 
     try {
+      const stored = code || window.localStorage.getItem(CODE_KEY) || "";
+
       const res = await fetch(api("/api/agent"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-agent-code": stored },
         signal: ctrl.signal,
         body: JSON.stringify({
           useCase: useCase.trim(),
@@ -111,10 +117,20 @@ export default function AgentPanel({
         }),
       });
 
+      if (res.status === 401) {
+        setNeedsCode(true);
+        window.localStorage.removeItem(CODE_KEY);
+        throw new Error("This deployment needs an access code before it will spend anything.");
+      }
+
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({ error: "Agent failed to start." }));
         throw new Error(body.error ?? "Agent failed to start.");
       }
+
+      // The code worked — remember it so this is a once-per-browser question.
+      if (stored) window.localStorage.setItem(CODE_KEY, stored);
+      setNeedsCode(false);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -155,7 +171,7 @@ export default function AgentPanel({
       setLog([...logRef.current]);
       setRunning(false);
     }
-  }, [useCase, capPrice, maxPrice, cats, seeds, depth, push]);
+  }, [useCase, capPrice, maxPrice, cats, seeds, depth, code, push]);
 
   useEffect(() => {
     if (running) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -263,6 +279,16 @@ export default function AgentPanel({
                 <span className="block text-[10px] opacity-70">{d.note}</span>
               </button>
             ))}
+
+            {needsCode && (
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                type="password"
+                placeholder="access code"
+                className="w-36 rounded-lg border border-sale/50 bg-panel px-3 py-1.5 font-mono text-xs outline-none focus:border-brand/60"
+              />
+            )}
 
             <div className="ml-auto flex gap-2">
               {running && (
