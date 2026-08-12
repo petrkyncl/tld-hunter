@@ -46,6 +46,8 @@ export interface ScanMeta {
   type: "meta";
   total: number;
   query: string;
+  /** Suffix the user typed explicitly, pinned to the top of the results. */
+  focus?: string;
   pricedCount: number;
 }
 

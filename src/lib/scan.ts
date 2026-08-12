@@ -12,6 +12,8 @@ import type { Confidence, Status, TldResult, Via } from "./types";
 export interface NormalizedQuery {
   label: string;
   display: string;
+  /** The suffix the user typed explicitly, if any: "kyncl.co.uk" -> "co.uk". */
+  suffix?: string;
 }
 
 const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -33,10 +35,15 @@ export function normalizeQuery(raw: string): NormalizedQuery | { error: string }
   if (!LABEL_RE.test(ascii)) {
     return { error: "Only letters, digits and hyphens are allowed (not at the edges)." };
   }
-  return { label: ascii, display: label };
+  const rest = trimmed.slice(label.length + 1);
+  const suffix = rest && /^[a-z0-9.-]+$/.test(rest) ? domainToASCII(rest) || undefined : undefined;
+
+  return { label: ascii, display: label, suffix };
 }
 
 export interface ScanOptions {
+  /** Suffix the user asked for by name — checked and reported first. */
+  focus?: string;
   limit?: number;
   /** Skip phase 2 entirely (DNS-only sweep). */
   verify?: boolean;
@@ -49,12 +56,19 @@ export interface ScanEmitter {
   phase: (p: { phase: "verify"; pending: number }) => void;
 }
 
-export async function buildTargets(limit?: number) {
+export async function buildTargets(limit?: number, focus?: string) {
   const [tlds, pricing] = await Promise.all([
     getAllTlds(),
     getPricing().catch(() => ({}) as Record<string, Price>),
   ]);
-  const list = typeof limit === "number" ? tlds.slice(0, limit) : tlds;
+  let list = typeof limit === "number" ? tlds.slice(0, limit) : tlds;
+
+  // whatever the user typed jumps the queue in both phases
+  if (focus) {
+    const hit = list.find((t) => t.tld === focus);
+    if (hit) list = [{ ...hit, rank: -1 }, ...list.filter((t) => t.tld !== focus)];
+  }
+
   return { list, pricing: pricing as Record<string, Price> };
 }
 
@@ -112,8 +126,8 @@ export async function scan(
   opts: ScanOptions,
   emit: ScanEmitter,
 ): Promise<number> {
-  const { list, pricing } = await buildTargets(opts.limit);
-  const pending: Array<{ tld: string; domain: string }> = [];
+  const { list, pricing } = await buildTargets(opts.limit, opts.focus);
+  const pending: Array<{ tld: string; domain: string; rank: number }> = [];
 
   const scanned = await pooled(
     list,
@@ -146,13 +160,17 @@ export async function scan(
     },
     (result) => {
       emit.result(result);
-      if (result.confidence === "likely") pending.push({ tld: result.tld, domain: result.domain });
+      if (result.confidence === "likely") {
+        pending.push({ tld: result.tld, domain: result.domain, rank: result.rank });
+      }
     },
     opts.signal,
   );
 
   if (opts.verify === false || opts.signal?.aborted || !pending.length) return scanned;
 
+  // most relevant suffixes first, so the top of the list firms up immediately
+  pending.sort((a, b) => a.rank - b.rank);
   emit.phase({ phase: "verify", pending: pending.length });
 
   await pooled(
