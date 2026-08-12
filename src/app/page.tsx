@@ -1,5 +1,5 @@
-import DomainSearch from "@/components/DomainSearch";
+import Workspace from "@/components/Workspace";
 
 export default function Home() {
-  return <DomainSearch />;
+  return <Workspace />;
 }

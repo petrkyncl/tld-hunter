@@ -37,7 +37,15 @@ const STATUS_ORDER: Record<Status, number> = {
 const MAX_LEN = 24;
 const PAGE = 400;
 
-export default function DomainSearch() {
+export default function DomainSearch({
+  currency,
+  rates,
+  onCurrency,
+}: {
+  currency: Currency;
+  rates: Rates | null;
+  onCurrency: (c: Currency) => void;
+}) {
   const [query, setQuery] = useState("");
   const [label, setLabel] = useState("");
   const [focus, setFocus] = useState<string | null>(null);
@@ -52,9 +60,6 @@ export default function DomainSearch() {
   const [verifyDone, setVerifyDone] = useState(0);
   const [selected, setSelected] = useState<TldResult | null>(null);
   const [shown, setShown] = useState(PAGE);
-
-  const [rates, setRates] = useState<Rates | null>(null);
-  const [currency, setCurrency] = useState<Currency>("CZK");
 
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("smart");
@@ -71,18 +76,13 @@ export default function DomainSearch() {
   const updateRef = useRef<ScanUpdateMsg[]>([]);
   const flushRef = useRef<number | null>(null);
 
-  // catalogue and FX load in parallel on mount, so the grid is populated before
-  // the user has typed anything at all
+  // the catalogue loads on mount, so the list is populated before the user has
+  // typed anything at all
   useEffect(() => {
     fetch(api("/api/tlds"))
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d?.tlds && setCatalog(d.tlds as Catalog[]))
       .catch(() => setError("Could not load the TLD catalogue."));
-
-    fetch(api("/api/rates"))
-      .then((r) => (r.ok ? r.json() : null))
-      .then((r) => r && !r.error && setRates(r as Rates))
-      .catch(() => setCurrency("USD"));
   }, []);
 
   const flush = useCallback(() => {
@@ -290,18 +290,7 @@ export default function DomainSearch() {
   const verifyPct = verifyPending ? Math.round((verifyDone / verifyPending) * 100) : 0;
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:py-12">
-      <header className="mb-6">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-          TLD <span className="text-brand">Hunter</span>
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted">
-          One name against <strong className="text-fg">every TLD on earth</strong>. Rows turn green
-          when the name is free, blue when it is listed on the aftermarket, red when it is taken.
-          Click any row for registry data and a history audit.
-        </p>
-      </header>
-
+    <>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -450,7 +439,7 @@ export default function DomainSearch() {
           <Control label="Currency">
             <select
               value={currency}
-              onChange={(e) => setCurrency(e.target.value as Currency)}
+              onChange={(e) => onCurrency(e.target.value as Currency)}
               className="rounded-md border border-edge bg-panel px-2 py-1 outline-none focus:border-brand/60"
             >
               {CURRENCIES.map((c) => (
@@ -602,7 +591,7 @@ export default function DomainSearch() {
         </p>
         <p>Domain history: Internet Archive + Certificate Transparency (crt.sh).</p>
       </footer>
-    </main>
+    </>
   );
 }
 

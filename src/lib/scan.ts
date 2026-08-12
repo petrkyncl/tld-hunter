@@ -97,7 +97,7 @@ export function describeTld(tld: string, rank: number, price?: Price) {
  * Authoritative answer for one domain: RDAP where the registry has it, port-43
  * WHOIS where it does not. Returns null when neither could answer.
  */
-async function authoritative(
+export async function authoritative(
   domain: string,
   tld: string,
   signal?: AbortSignal,
