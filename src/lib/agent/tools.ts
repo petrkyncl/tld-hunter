@@ -31,7 +31,7 @@ export const TOOLS = [
   {
     name: "sweep_name",
     description:
-      "Check one second-level name against the TLD space, filtered by the brief's budget and categories. " +
+      "Check one second-level name against the TLD space. " +
       "Returns only registry-confirmed availability plus any aftermarket listings. " +
       "This is the main tool — call it for every name idea you want to evaluate. " +
       "You can call it several times in one turn to evaluate a batch of ideas in parallel.",
@@ -46,7 +46,12 @@ export const TOOLS = [
           type: "array",
           items: { type: "string" },
           description:
-            "Suffixes to check even if they fall outside the budget or category filters, e.g. ['com','cz'].",
+            "Suffixes to check even if they fall outside the price ceiling or category filters, e.g. ['com','cz'].",
+        },
+        max_price_usd: {
+          type: "number",
+          description:
+            "Optional yearly-renewal ceiling in USD for this call. Choose it yourself from what the user said about price; leave it out to search the whole price range.",
         },
       },
       required: ["name"],
@@ -81,6 +86,10 @@ export const TOOLS = [
           type: "array",
           items: { type: "string", enum: CATEGORY_IDS },
           description: "Restrict to these categories.",
+        },
+        max_price_usd: {
+          type: "number",
+          description: "Optional yearly-renewal ceiling in USD. Leave out to see the full range.",
         },
         limit: { type: "integer", description: "Max suffixes to return (default 40)." },
       },
@@ -135,9 +144,13 @@ export async function runTool(
         : undefined;
       ctx.onActivity({ tool: "sweep_name", detail: label });
 
+      const maxPriceUsd = Number.isFinite(input.max_price_usd)
+        ? Number(input.max_price_usd)
+        : ctx.filters.maxPriceUsd;
+
       const res = await sweepName(
         label,
-        { ...ctx.filters, mustInclude },
+        { ...ctx.filters, maxPriceUsd, mustInclude },
         { signal: ctx.signal },
       );
       if ("error" in res) return `error: ${res.error}`;
@@ -179,7 +192,11 @@ export async function runTool(
         : ctx.filters.categories;
       ctx.onActivity({ tool: "list_tlds", detail: categories?.join(", ") ?? "all" });
 
-      const res = await listTlds({ ...ctx.filters, categories, limit });
+      const maxPriceUsd = Number.isFinite(input.max_price_usd)
+        ? Number(input.max_price_usd)
+        : ctx.filters.maxPriceUsd;
+
+      const res = await listTlds({ ...ctx.filters, categories, maxPriceUsd, limit });
       if (!res.length) return "no suffixes match those constraints — loosen the budget or categories";
       return res
         .map((t) => `.${t.tld} $${(t.renew ?? t.price ?? 0).toFixed(0)}/yr`)
