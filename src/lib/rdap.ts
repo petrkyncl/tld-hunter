@@ -7,18 +7,36 @@ const BOOTSTRAP = "https://data.iana.org/rdap/dns.json";
 
 /**
  * Registries are aggressive about bulk queries — Identity Digital alone serves
- * ~450 TLDs from one endpoint and answers 403 to everything for a while once
- * you burst it. So each endpoint gets: max 2 in flight, a minimum gap between
- * requests, and a circuit breaker that parks the host after repeated rejections.
+ * ~450 TLDs from one endpoint and answers 403 to *everything* for ten minutes
+ * once you burst it, which on a shared server IP would take the tool down for
+ * every user. So the pace per endpoint is discovered rather than guessed: start
+ * fast, widen the gap sharply the moment a registry pushes back, decay it again
+ * while answers keep coming, and park the host entirely if it keeps refusing.
  */
-const gate = new KeyedSemaphore(2);
-const MIN_GAP_MS = 120;
-const BREAKER_TRIP = 3;
+const gate = new KeyedSemaphore(6);
+const MIN_GAP_MS = 35;
+const MAX_GAP_MS = 3000;
+const BREAKER_TRIP = 6;
 const BREAKER_COOLDOWN = 10 * 60 * 1000;
 
 const lastCall = new Map<string, number>();
+const gapMs = new Map<string, number>();
 const strikes = new Map<string, number>();
 const parkedUntil = new Map<string, number>();
+
+function currentGap(host: string) {
+  return gapMs.get(host) ?? MIN_GAP_MS;
+}
+
+function slowDown(host: string) {
+  gapMs.set(host, Math.min(MAX_GAP_MS, currentGap(host) * 2 + 150));
+}
+
+function speedUp(host: string) {
+  const next = currentGap(host) * 0.85;
+  if (next <= MIN_GAP_MS) gapMs.delete(host);
+  else gapMs.set(host, next);
+}
 
 interface Bootstrap {
   services: Array<[string[], string[]]>;
@@ -117,6 +135,7 @@ function parse(payload: RdapPayload): RdapDomain {
 }
 
 function trip(host: string) {
+  slowDown(host);
   const n = (strikes.get(host) ?? 0) + 1;
   strikes.set(host, n);
   if (n >= BREAKER_TRIP) parkedUntil.set(host, Date.now() + BREAKER_COOLDOWN);
@@ -145,7 +164,7 @@ export async function rdapLookup(
   const url = `${base}domain/${encodeURIComponent(domain)}`;
 
   return gate.run(host, async () => {
-    const wait = MIN_GAP_MS - (Date.now() - (lastCall.get(host) ?? 0));
+    const wait = currentGap(host) - (Date.now() - (lastCall.get(host) ?? 0));
     if (wait > 0) await sleep(wait);
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -161,6 +180,7 @@ export async function rdapLookup(
         if (res.status === 404) {
           void res.body?.cancel();
           strikes.delete(host);
+          speedUp(host);
           return { verdict: "available" };
         }
 
@@ -174,6 +194,7 @@ export async function rdapLookup(
 
         if (res.ok) {
           strikes.delete(host);
+          speedUp(host);
           if (!opts.detail) {
             void res.body?.cancel();
             return { verdict: "registered" };

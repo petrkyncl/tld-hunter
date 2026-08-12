@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import AuditPanel from "./AuditPanel";
 import { formatMonthly, formatPrice } from "./money";
 import { KIND_LABEL } from "@/lib/categories";
+import { api } from "@/lib/basePath";
 import type { Currency, Rates } from "@/lib/fx";
 import type { TldResult } from "@/lib/types";
 
@@ -52,7 +53,7 @@ export default function DomainDrawer({
   useEffect(() => {
     let alive = true;
 
-    fetch(`/api/detail?domain=${encodeURIComponent(r.domain)}&tld=${encodeURIComponent(r.tld)}`)
+    fetch(api(`/api/detail?domain=${encodeURIComponent(r.domain)}&tld=${encodeURIComponent(r.tld)}`))
       .then((res) => res.json())
       .then((d) => alive && setDetail(d))
       .catch(() => alive && setDetail({ verdict: "unknown" }))

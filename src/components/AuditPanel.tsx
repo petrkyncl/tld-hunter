@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { api } from "@/lib/basePath";
 import type { AuditReport } from "@/lib/audit";
 
 const LEVEL = {
@@ -19,7 +20,7 @@ export default function AuditPanel({ domain }: { domain: string }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/audit?domain=${encodeURIComponent(domain)}`);
+      const res = await fetch(api(`/api/audit?domain=${encodeURIComponent(domain)}`));
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Audit failed.");
       setReport(json as AuditReport);

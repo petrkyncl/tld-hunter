@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DomainDrawer from "./DomainDrawer";
 import DomainRow from "./DomainRow";
-import { formatPrice } from "./money";
+import { formatMonthly, formatPrice } from "./money";
 import { CATEGORIES, KIND_LABEL, type CategoryId, type TldKind } from "@/lib/categories";
 import { CURRENCIES, type Currency, type Rates } from "@/lib/fx";
+import { api } from "@/lib/basePath";
 import type { ScanMessage, ScanUpdateMsg, Status, TldResult } from "@/lib/types";
 
 type Filter = "all" | "free" | "forsale" | "taken";
@@ -39,6 +40,7 @@ const PAGE = 400;
 export default function DomainSearch() {
   const [query, setQuery] = useState("");
   const [label, setLabel] = useState("");
+  const [focus, setFocus] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
   const [catalog, setCatalog] = useState<Catalog[]>([]);
@@ -58,6 +60,7 @@ export default function DomainSearch() {
   const [sort, setSort] = useState<Sort>("smart");
   const [needle, setNeedle] = useState("");
   const [pricedOnly, setPricedOnly] = useState(true);
+  const [latinOnly, setLatinOnly] = useState(true);
   const [levels, setLevels] = useState<Levels>("1");
   const [maxLen, setMaxLen] = useState(MAX_LEN);
   const [kind, setKind] = useState<TldKind | "all">("all");
@@ -71,12 +74,12 @@ export default function DomainSearch() {
   // catalogue and FX load in parallel on mount, so the grid is populated before
   // the user has typed anything at all
   useEffect(() => {
-    fetch("/api/tlds")
+    fetch(api("/api/tlds"))
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d?.tlds && setCatalog(d.tlds as Catalog[]))
       .catch(() => setError("Could not load the TLD catalogue."));
 
-    fetch("/api/rates")
+    fetch(api("/api/rates"))
       .then((r) => (r.ok ? r.json() : null))
       .then((r) => r && !r.error && setRates(r as Rates))
       .catch(() => setCurrency("USD"));
@@ -133,12 +136,13 @@ export default function DomainSearch() {
     setElapsed(null);
     setRunning(true);
     setLabel(q.split(".")[0].toLowerCase());
+    setFocus(null);
 
     if (flushRef.current) window.clearInterval(flushRef.current);
     flushRef.current = window.setInterval(flush, 120);
 
     try {
-      const res = await fetch(`/api/scan?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+      const res = await fetch(api(`/api/scan?q=${encodeURIComponent(q)}`), { signal: ctrl.signal });
 
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({ error: "Scan failed." }));
@@ -160,7 +164,8 @@ export default function DomainSearch() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const msg = JSON.parse(line) as ScanMessage;
-          if (msg.type === "result") bufferRef.current.push(msg);
+          if (msg.type === "meta") setFocus(msg.focus ?? null);
+          else if (msg.type === "result") bufferRef.current.push(msg);
           else if (msg.type === "update") updateRef.current.push(msg);
           else if (msg.type === "phase") setVerifyPending(msg.pending);
           else if (msg.type === "done") setElapsed(msg.ms);
@@ -199,6 +204,11 @@ export default function DomainSearch() {
     });
   }, [catalog, scanMap, label]);
 
+  const focused = useMemo(
+    () => (focus ? (rows.find((r) => r.tld === focus) ?? null) : null),
+    [rows, focus],
+  );
+
   const counts = useMemo(() => {
     const c = { all: rows.length, free: 0, forsale: 0, taken: 0, unknown: 0, pending: 0 };
     for (const r of rows) c[r.status]++;
@@ -208,8 +218,11 @@ export default function DomainSearch() {
   const visible = useMemo(() => {
     const n = needle.trim().toLowerCase();
     const list = rows.filter((r) => {
+      if (focus && r.tld === focus) return false; // shown on its own above
       if (filter !== "all" && r.status !== filter) return false;
       if (pricedOnly && r.price === undefined) return false;
+      // IDN suffixes render as Chinese/Cyrillic/Arabic script — off by default
+      if (latinOnly && !/^[a-z0-9.-]+$/.test(r.tldUnicode)) return false;
       if (levels === "1" && r.labels !== 1) return false;
       if (levels === "2" && r.labels < 2) return false;
       if (r.length > maxLen) return false;
@@ -237,7 +250,7 @@ export default function DomainSearch() {
           );
       }
     });
-  }, [rows, filter, sort, needle, pricedOnly, levels, maxLen, kind, cats]);
+  }, [rows, focus, filter, sort, needle, pricedOnly, latinOnly, levels, maxLen, kind, cats]);
 
   const cheapestFree = useMemo(() => {
     let best: TldResult | undefined;
@@ -301,13 +314,12 @@ export default function DomainSearch() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="something"
+              placeholder="a name, or a full domain like kyncl.cz"
               autoFocus
               spellCheck={false}
               autoComplete="off"
               className="w-full bg-transparent py-3 font-mono text-lg outline-none placeholder:text-muted/50"
             />
-            <span className="shrink-0 font-mono text-lg text-muted">.*</span>
           </div>
 
           <div className="flex gap-2">
@@ -352,6 +364,15 @@ export default function DomainSearch() {
         <p className="mt-4 rounded-xl border border-taken/40 bg-taken/10 px-4 py-3 text-sm text-taken">
           {error}
         </p>
+      )}
+
+      {focused && (
+        <FocusCard
+          r={focused}
+          currency={currency}
+          rates={rates}
+          onOpen={() => setSelected(focused)}
+        />
       )}
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -471,6 +492,16 @@ export default function DomainSearch() {
             sellable only
           </label>
 
+          <label className="flex cursor-pointer items-center gap-1.5 text-muted">
+            <input
+              type="checkbox"
+              checked={latinOnly}
+              onChange={(e) => { setLatinOnly(e.target.checked); setShown(PAGE); }}
+              className="accent-brand"
+            />
+            latin only
+          </label>
+
           <button
             onClick={exportCsv}
             disabled={!visible.length}
@@ -572,6 +603,100 @@ export default function DomainSearch() {
         <p>Domain history: Internet Archive + Certificate Transparency (crt.sh).</p>
       </footer>
     </main>
+  );
+}
+
+const VERDICT: Record<TldResult["status"], { text: string; tone: string; edge: string }> = {
+  pending: { text: "Checking this one…", tone: "text-muted", edge: "border-edge" },
+  free: { text: "This one is available", tone: "text-free", edge: "border-free/50 bg-free/5" },
+  forsale: { text: "This one is taken, but listed for sale", tone: "text-sale", edge: "border-sale/50 bg-sale/5" },
+  taken: { text: "This one is taken", tone: "text-taken", edge: "border-taken/50 bg-taken/5" },
+  unknown: { text: "This registry would not say", tone: "text-unknown", edge: "border-edge" },
+};
+
+/** The exact domain the user typed, answered before anything else. */
+function FocusCard({
+  r,
+  currency,
+  rates,
+  onOpen,
+}: {
+  r: TldResult;
+  currency: Currency;
+  rates: Rates | null;
+  onOpen: () => void;
+}) {
+  const v = VERDICT[r.status];
+  const first = formatPrice(r.price, currency, rates);
+  const renewal = formatPrice(r.renew, currency, rates);
+  const monthly = formatMonthly(r.renew ?? r.price, currency, rates);
+
+  return (
+    <section className={`mt-4 rounded-2xl border p-4 ${v.edge}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-2xl">
+            <span className="text-muted">{r.domainUnicode.split(".")[0]}</span>
+            <span className="text-fg">.{r.tldUnicode}</span>
+          </p>
+          <p className={`mt-1 text-sm font-medium ${v.tone}`}>
+            {v.text}
+            {r.confidence === "likely" && r.status !== "pending" && r.status !== "unknown" && (
+              <span className="ml-2 text-xs font-normal text-muted">
+                (DNS says so, still confirming with the registry)
+              </span>
+            )}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {first && (
+            <div className="text-right font-mono leading-tight">
+              <div className="text-lg">{first}</div>
+              {renewal && <div className="text-[11px] text-muted">then {renewal}/yr</div>}
+              {monthly && <div className="text-[11px] text-muted">{monthly}/mo</div>}
+            </div>
+          )}
+          {r.status === "free" && (
+            <a
+              href={`https://porkbun.com/checkout/search?q=${encodeURIComponent(r.domain)}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="rounded-lg border border-free/40 bg-free/10 px-3 py-2 text-sm font-medium text-free transition hover:bg-free/20"
+            >
+              Register ↗
+            </a>
+          )}
+          {r.market && (
+            <a
+              href={r.market.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="rounded-lg border border-sale/40 bg-sale/10 px-3 py-2 text-sm font-medium text-sale transition hover:bg-sale/20"
+            >
+              {r.market.name} ↗
+            </a>
+          )}
+          <button
+            onClick={onOpen}
+            disabled={r.status === "pending"}
+            className="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-muted transition hover:text-fg disabled:opacity-40"
+          >
+            Details & history
+          </button>
+        </div>
+      </div>
+
+      {r.status !== "free" && (
+        <p className="mt-3 text-xs text-muted">
+          Everything else for <span className="font-mono">{r.domainUnicode.split(".")[0]}</span> is
+          below — {r.status === "forsale"
+            ? "aftermarket prices are rarely close to a fresh registration, so check the free suffixes first"
+            : "the available ones are listed first"}
+          .
+        </p>
+      )}
+    </section>
   );
 }
 

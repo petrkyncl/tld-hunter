@@ -34,17 +34,18 @@ export async function GET(req: NextRequest) {
       };
 
       try {
-        const { list, pricing } = await buildTargets(limit);
+        const { list, pricing } = await buildTargets(limit, normalized.suffix);
         send({
           type: "meta",
           total: list.length,
           query: normalized.label,
+          focus: normalized.suffix,
           pricedCount: Object.keys(pricing).length,
         });
 
         const scanned = await scan(
           normalized.label,
-          { verify, limit, signal: req.signal },
+          { verify, limit, focus: normalized.suffix, signal: req.signal },
           {
             result: (r) => send({ type: "result", ...r }),
             update: (u) => send({ type: "update", ...u }),
