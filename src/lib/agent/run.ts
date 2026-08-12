@@ -86,6 +86,8 @@ Stop when you have 5-8 genuinely good candidates, or when the remaining budget i
 # What makes a candidate good
 It fits this user's use case specifically, not domains in general. Short and sayable beats clever. A .com is worth more than a novelty suffix at the same price, but a memorable name on a fitting suffix beats a forgettable one on .com.
 
+A taken name is not always a dead end: check_domains reports an asking price when the current owner has it listed. Those cost thousands rather than tens, so only raise one when the name is clearly worth it, and say the price plainly so the user can judge.
+
 Price is a factor, not a gate, unless the user set a hard ceiling. A name that is worth twice the money is worth shortlisting — say what it costs and why you think it earns it, and let the user decide. A name they would resent paying for every year is not a find, however clever.
 
 # Communicating

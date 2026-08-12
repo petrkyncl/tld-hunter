@@ -55,7 +55,14 @@ const SIGNATURES: Array<{ match: RegExp; name: string; buy: (d: string) => strin
   { match: /(^|\.)bodis\.com$/, name: "Bodis (parking)", buy: (d) => `https://${d}` },
   { match: /(^|\.)parkingcrew\.net$/, name: "ParkingCrew", buy: (d) => `https://${d}` },
   { match: /(^|\.)cashparking\.com$/, name: "GoDaddy parking", buy: (d) => `https://${d}` },
-  { match: /(^|\.)above\.com$/, name: "Above.com", buy: (d) => `https://${d}` },
+  // Above.com/Trellian answer on several unrelated-looking domains — matching
+  // only "above.com" silently missed every domain parked on abovedomains.com.
+  { match: /(^|\.)above(domains)?\.com$/, name: "Above.com", buy: (d) => `https://${d}` },
+  { match: /(^|\.)trellian\.com$/, name: "Trellian", buy: (d) => `https://${d}` },
+  { match: /(^|\.)internettraffic\.com$/, name: "Above.com", buy: (d) => `https://${d}` },
+  { match: /(^|\.)smartname\.com$|(^|\.)oversee\.net$/, name: "DomainSponsor", buy: (d) => `https://${d}` },
+  { match: /(^|\.)ztomy\.com$|(^|\.)nameservers\.pro$/, name: "Rook Media", buy: (d) => `https://${d}` },
+  { match: /(^|\.)epik\.com$/, name: "Epik", buy: (d) => `https://${d}` },
   { match: /(^|\.)fabulous\.com$/, name: "Fabulous", buy: (d) => `https://${d}` },
   { match: /(^|\.)parklogic\.com$/, name: "ParkLogic", buy: (d) => `https://${d}` },
   { match: /(^|\.)voodoo\.com$/, name: "Voodoo (parking)", buy: (d) => `https://${d}` },
@@ -71,6 +78,12 @@ export function detectMarket(domain: string, ns: string[]): Market | undefined {
   }
   return undefined;
 }
+
+/**
+ * Nameservers are only a hint: plenty of listed domains keep their owner's own
+ * DNS, so a miss here does not mean the domain is unlisted — lib/market.ts asks
+ * the marketplace directly, which is authoritative.
+ */
 
 /** Where to look when nothing was detected but the user still wants to buy. */
 export function aftermarketLinks(domain: string) {

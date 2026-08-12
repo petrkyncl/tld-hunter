@@ -61,6 +61,8 @@ export const TOOLS = [
     name: "check_domains",
     description:
       "Authoritative status for up to 20 exact domains you already have in mind. " +
+      "Also reports the aftermarket asking price when a taken domain is listed for sale, " +
+      "so a name being taken does not automatically rule it out. " +
       "Use when you want specific full domains rather than one name across many suffixes.",
     input_schema: {
       type: "object",
@@ -178,10 +180,11 @@ export async function runTool(
       const res = await checkDomains(domains, ctx.signal);
       if (!res.length) return "error: no valid domains given";
       return res
-        .map(
-          (r) =>
-            `${r.domain}: ${r.status}${r.renew !== undefined ? ` ($${r.renew.toFixed(0)}/yr)` : ""}`,
-        )
+        .map((r) => {
+          const ask = r.askUsd ? ` asking $${r.askUsd.toLocaleString("en-US")}` : "";
+          const yearly = r.renew !== undefined ? ` ($${r.renew.toFixed(0)}/yr)` : "";
+          return `${r.domain}: ${r.status}${ask}${yearly}`;
+        })
         .join("\n");
     }
 
