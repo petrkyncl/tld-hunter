@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { hasAccess } from "@/lib/agent/auth";
 import { runAgent, type AgentBrief, type AgentEvent } from "@/lib/agent/run";
 
 export const runtime = "nodejs";
@@ -6,6 +7,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
+  // Checked before parsing the body, so a wrong code costs nothing.
+  if (!hasAccess(req)) {
+    return Response.json({ error: "access code required", code: "unauthorized" }, { status: 401 });
+  }
+
   let brief: AgentBrief;
   try {
     brief = (await req.json()) as AgentBrief;
