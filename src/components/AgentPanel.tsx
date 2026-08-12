@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Markdown from "./Markdown";
 import { formatPrice } from "./money";
 import { api } from "@/lib/basePath";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
@@ -342,17 +343,14 @@ export default function AgentPanel({
                   </p>
                 ) : item.kind === "thinking" ? (
                   showThinking && (
-                    <p
+                    <Markdown
                       key={i}
-                      className="whitespace-pre-wrap border-l-2 border-edge pl-3 text-xs italic text-muted"
-                    >
-                      {item.text}
-                    </p>
+                      text={item.text}
+                      className="border-l-2 border-edge pl-3 text-xs text-muted"
+                    />
                   )
                 ) : (
-                  <p key={i} className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {item.text}
-                  </p>
+                  <Markdown key={i} text={item.text} className="text-sm leading-relaxed" />
                 ),
               )}
               <div ref={bottomRef} />
@@ -394,7 +392,7 @@ export default function AgentPanel({
                   {formatPrice(c.renewUsd ?? c.priceUsd, currency, rates) ?? "—"}/yr
                   {c.trust !== undefined && ` · trust ${c.trust}`}
                 </p>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted">{c.reason}</p>
+                <Markdown text={c.reason} className="mt-1.5 text-xs leading-relaxed text-muted" />
               </li>
             ))}
           </ul>
