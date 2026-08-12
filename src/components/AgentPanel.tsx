@@ -34,6 +34,7 @@ export default function AgentPanel({
   rates: Rates | null;
 }) {
   const [useCase, setUseCase] = useState("");
+  const [capPrice, setCapPrice] = useState(false);
   const [maxPrice, setMaxPrice] = useState(40);
   const [cats, setCats] = useState<CategoryId[]>([]);
   const [seeds, setSeeds] = useState("");
@@ -100,7 +101,7 @@ export default function AgentPanel({
         signal: ctrl.signal,
         body: JSON.stringify({
           useCase: useCase.trim(),
-          maxPriceUsd: maxPrice,
+          maxPriceUsd: capPrice ? maxPrice : undefined,
           categories: cats,
           seedNames: seeds
             .split(/[,\s]+/)
@@ -154,7 +155,7 @@ export default function AgentPanel({
       setLog([...logRef.current]);
       setRunning(false);
     }
-  }, [useCase, maxPrice, cats, seeds, depth, push]);
+  }, [useCase, capPrice, maxPrice, cats, seeds, depth, push]);
 
   useEffect(() => {
     if (running) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -169,8 +170,9 @@ export default function AgentPanel({
           <h2 className="text-sm font-medium">Tell the agent what you are building</h2>
           <p className="mt-1 text-xs text-muted">
             The more it knows about the product, the audience, and what you have already
-            considered, the better its ideas. It checks every name against real registries
-            before shortlisting it.
+            considered, the better its ideas. Say what you think about price here too — a
+            sentence in your own words works better than a slider. It checks every name
+            against real registries before shortlisting it.
           </p>
 
           <textarea
@@ -178,24 +180,40 @@ export default function AgentPanel({
             onChange={(e) => setUseCase(e.target.value)}
             rows={5}
             placeholder={
-              "A booking tool for small physiotherapy clinics in Czechia. Calm, trustworthy, not techy. I liked 'fyzio' names but they all feel taken. Czech or neutral-European reads better than American startup-speak."
+              "A booking tool for small physiotherapy clinics in Czechia. Calm, trustworthy, not techy. I liked 'fyzio' names but they all feel taken. Czech or neutral-European reads better than American startup-speak.\n\nOn price: I'd rather pay for something that lasts than optimise for cheap — anything under about $60 a year is fine, and I'd stretch further for the right .com."
             }
             className="mt-3 w-full rounded-xl border border-edge bg-ink p-3 text-sm leading-relaxed outline-none placeholder:text-muted/40 focus:border-brand/60"
           />
 
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 text-xs">
-            <label className="flex items-center gap-2 text-muted">
-              <span className="whitespace-nowrap">Max {budgetLabel}/yr</span>
+            <label className="flex cursor-pointer items-center gap-1.5 text-muted">
               <input
-                type="range"
-                min={5}
-                max={200}
-                step={5}
-                value={maxPrice}
-                onChange={(e) => setMaxPrice(Number(e.target.value))}
-                className="w-32 accent-brand"
+                type="checkbox"
+                checked={capPrice}
+                onChange={(e) => setCapPrice(e.target.checked)}
+                className="accent-brand"
               />
+              hard price cap
             </label>
+
+            {capPrice ? (
+              <label className="flex items-center gap-2 text-muted">
+                <span className="whitespace-nowrap">Never above {budgetLabel}/yr</span>
+                <input
+                  type="range"
+                  min={5}
+                  max={200}
+                  step={5}
+                  value={maxPrice}
+                  onChange={(e) => setMaxPrice(Number(e.target.value))}
+                  className="w-32 accent-brand"
+                />
+              </label>
+            ) : (
+              <span className="text-muted/70">
+                no ceiling — the agent judges price from what you wrote
+              </span>
+            )}
 
             <label className="flex flex-1 items-center gap-2 text-muted">
               <span className="whitespace-nowrap">Your own ideas</span>
