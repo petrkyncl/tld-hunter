@@ -53,6 +53,12 @@ export const TOOLS = [
           description:
             "Optional yearly-renewal ceiling in USD for this call. Choose it yourself from what the user said about price; leave it out to search the whole price range.",
         },
+        categories: {
+          type: "array",
+          items: { type: "string", enum: CATEGORY_IDS },
+          description:
+            "Optional: narrow this call to these TLD categories. Leave it out — the default — to search the popular suffixes across all categories, which is usually what you want. The user's stated leaning is a preference, not a filter.",
+        },
       },
       required: ["name"],
     },
@@ -150,9 +156,17 @@ export async function runTool(
         ? Number(input.max_price_usd)
         : ctx.filters.maxPriceUsd;
 
+      // No category filter unless this call asked for one: the user's leaning
+      // guides which suffixes to favour, it does not delete the rest of the
+      // namespace. Filtering on "technology" would drop .com, which lives in
+      // the generic bucket — never what someone ticking a preference means.
+      const categories = Array.isArray(input.categories)
+        ? (input.categories as SweepFilters["categories"])
+        : undefined;
+
       const res = await sweepName(
         label,
-        { ...ctx.filters, maxPriceUsd, mustInclude },
+        { ...ctx.filters, maxPriceUsd, categories, mustInclude },
         { signal: ctx.signal },
       );
       if ("error" in res) return `error: ${res.error}`;
@@ -192,7 +206,7 @@ export async function runTool(
       const limit = Math.min(Number(input.limit) || 40, 80);
       const categories = Array.isArray(input.categories)
         ? (input.categories as SweepFilters["categories"])
-        : ctx.filters.categories;
+        : undefined;
       ctx.onActivity({ tool: "list_tlds", detail: categories?.join(", ") ?? "all" });
 
       const maxPriceUsd = Number.isFinite(input.max_price_usd)

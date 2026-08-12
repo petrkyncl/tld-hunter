@@ -57,7 +57,9 @@ function systemPrompt(brief: AgentBrief): string {
     brief.maxPriceUsd !== undefined
       ? `Hard ceiling the user set: $${brief.maxPriceUsd} per year at renewal. Never shortlist above it.`
       : "The user set no hard ceiling. If the brief says anything about price, treat it as their judgment and honour it — pass your own max_price_usd to the tools to act on it. If it says nothing, search the full range and let price be one factor among several.",
-    brief.categories?.length ? `Preferred TLD categories: ${brief.categories.join(", ")}.` : null,
+    brief.categories?.length
+      ? `The user leans towards these kinds of suffix: ${brief.categories.join(", ")}. Favour them when the fit is close, but this is taste, not a rule — never drop .com, the country code, or another obvious candidate just because it sits in a different bucket.`
+      : null,
     brief.maxTldLength ? `Keep suffixes to ${brief.maxTldLength} characters or fewer.` : null,
     brief.seedNames?.length
       ? `The user already has these ideas — evaluate them first, then go beyond them: ${brief.seedNames.join(", ")}.`
@@ -164,9 +166,11 @@ export async function runAgent(
   let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 };
 
   const ctx = {
+    // The category leaning is deliberately absent here — it belongs in the
+    // prompt as guidance. As a filter it would silently delete whole swathes
+    // of the namespace the user never meant to exclude.
     filters: {
       maxPriceUsd: brief.maxPriceUsd,
-      categories: brief.categories,
       maxTldLength: brief.maxTldLength,
     },
     signal,
