@@ -7,6 +7,7 @@ import { api } from "@/lib/basePath";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import type { Currency, Rates } from "@/lib/fx";
 import type { AgentEvent, Depth, Usage } from "@/lib/agent/run";
+import type { RunSummary } from "@/lib/agent/store";
 import type { Candidate } from "@/lib/agent/tools";
 
 type LogItem =
@@ -53,8 +54,12 @@ export default function AgentPanel({
   const [showThinking, setShowThinking] = useState(true);
   const [needsCode, setNeedsCode] = useState(false);
   const [code, setCode] = useState("");
+  const [runId, setRunId] = useState<string | null>(null);
+  const [history, setHistory] = useState<RunSummary[]>([]);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const cursorRef = useRef(0);
   const logRef = useRef<LogItem[]>([]);
   const flushRef = useRef<number | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -77,42 +82,158 @@ export default function AgentPanel({
     }
   }, []);
 
+  const authHeaders = useCallback(
+    () => ({
+      "content-type": "application/json",
+      "x-agent-code": code || (typeof window !== "undefined" ? window.localStorage.getItem(CODE_KEY) ?? "" : ""),
+    }),
+    [code],
+  );
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      const res = await fetch(api("/api/agent"), { headers: authHeaders() });
+      if (!res.ok) return;
+      const json = (await res.json()) as { runs?: RunSummary[] };
+      setHistory(json.runs ?? []);
+    } catch {
+      /* history is a convenience, never a blocker */
+    }
+  }, [authHeaders]);
+
+  const apply = useCallback((e: AgentEvent) => {
+    if (e.type === "thinking") push({ kind: "thinking", text: e.text });
+    else if (e.type === "text") push({ kind: "text", text: e.text });
+    else if (e.type === "tool") push({ kind: "tool", tool: e.tool, detail: e.detail });
+    else if (e.type === "candidate") {
+      setShortlist((prev) =>
+        prev.some((c) => c.domain === e.candidate.domain)
+          ? prev
+          : [...prev, e.candidate].sort((a, b) => b.score - a.score),
+      );
+    } else if (e.type === "usage") {
+      setUsage(e.usage);
+      setProgress({ iteration: e.iteration, max: e.maxIterations });
+    } else if (e.type === "done") setFinished(e.reason);
+    else if (e.type === "error") setError(e.message);
+  }, [push]);
+
+  /**
+   * Follows a run's event stream, resuming from wherever we stopped reading.
+   * A dropped connection is a reconnect, not a lost run — the work carries on
+   * server-side either way.
+   */
+  const follow = useCallback(
+    async (id: string, ctrl: AbortController) => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await fetch(
+            api(`/api/agent/stream?id=${encodeURIComponent(id)}&from=${cursorRef.current}`),
+            { headers: authHeaders(), signal: ctrl.signal },
+          );
+          if (res.status === 401) {
+            setNeedsCode(true);
+            throw new Error("Access code required.");
+          }
+          if (!res.ok || !res.body) throw new Error("Lost the run's stream.");
+
+          setReconnecting(false);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          let ended = false;
+
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const { index, event } = JSON.parse(line) as { index: number; event: AgentEvent };
+              if (index < cursorRef.current) continue;
+              cursorRef.current = index + 1;
+              apply(event);
+              if (event.type === "done") ended = true;
+            }
+          }
+
+          if (ended || ctrl.signal.aborted) return;
+          // Stream closed without a terminal event: the server is still
+          // working and something in between gave up. Reattach.
+        } catch (err) {
+          if (ctrl.signal.aborted) return;
+          if (err instanceof Error && err.message === "Access code required.") {
+            setError("This deployment needs an access code before it will spend anything.");
+            return;
+          }
+        }
+
+        if (ctrl.signal.aborted) return;
+        setReconnecting(true);
+        await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)));
+      }
+    },
+    [apply, authHeaders],
+  );
+
+  /** Reopen a past search — finished ones replay, running ones catch up live. */
+  const openRun = useCallback(
+    async (id: string) => {
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      logRef.current = [];
+      cursorRef.current = 0;
+      setLog([]);
+      setShortlist([]);
+      setUsage(null);
+      setProgress({ iteration: 0, max: 0 });
+      setError(null);
+      setFinished(null);
+      setRunId(id);
+      setRunning(true);
+
+      if (flushRef.current) window.clearInterval(flushRef.current);
+      flushRef.current = window.setInterval(() => setLog([...logRef.current]), 140);
+
+      await follow(id, ctrl);
+
+      if (flushRef.current) window.clearInterval(flushRef.current);
+      flushRef.current = null;
+      setLog([...logRef.current]);
+      setRunning(false);
+      setReconnecting(false);
+      void refreshHistory();
+    },
+    [follow, refreshHistory],
+  );
+
   const start = useCallback(async () => {
     if (useCase.trim().length < 10) {
       setError("Describe what you are building — a sentence or two is enough.");
       return;
     }
 
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    logRef.current = [];
-    setLog([]);
-    setShortlist([]);
-    setUsage(null);
-    setProgress({ iteration: 0, max: 0 });
     setError(null);
-    setFinished(null);
-    setRunning(true);
+    const stored = code || window.localStorage.getItem(CODE_KEY) || "";
 
-    if (flushRef.current) window.clearInterval(flushRef.current);
-    flushRef.current = window.setInterval(() => setLog([...logRef.current]), 140);
-
+    let id: string;
     try {
-      const stored = code || window.localStorage.getItem(CODE_KEY) || "";
-
       const res = await fetch(api("/api/agent"), {
         method: "POST",
         headers: { "content-type": "application/json", "x-agent-code": stored },
-        signal: ctrl.signal,
         body: JSON.stringify({
           useCase: useCase.trim(),
           maxPriceUsd: capPrice ? maxPrice : undefined,
           categories: cats,
           seedNames: seeds
             .split(/[,\s]+/)
-            .map((s) => s.trim())
+            .map((x) => x.trim())
             .filter(Boolean),
           depth,
         }),
@@ -121,62 +242,51 @@ export default function AgentPanel({
       if (res.status === 401) {
         setNeedsCode(true);
         window.localStorage.removeItem(CODE_KEY);
-        throw new Error("This deployment needs an access code before it will spend anything.");
+        setError("This deployment needs an access code before it will spend anything.");
+        return;
       }
 
-      if (!res.ok || !res.body) {
-        const body = await res.json().catch(() => ({ error: "Agent failed to start." }));
-        throw new Error(body.error ?? "Agent failed to start.");
-      }
+      const json = (await res.json()) as { runId?: string; error?: string };
+      if (!res.ok || !json.runId) throw new Error(json.error ?? "Agent failed to start.");
 
-      // The code worked — remember it so this is a once-per-browser question.
       if (stored) window.localStorage.setItem(CODE_KEY, stored);
       setNeedsCode(false);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const e = JSON.parse(line) as AgentEvent;
-          if (e.type === "thinking") push({ kind: "thinking", text: e.text });
-          else if (e.type === "text") push({ kind: "text", text: e.text });
-          else if (e.type === "tool") push({ kind: "tool", tool: e.tool, detail: e.detail });
-          else if (e.type === "candidate") {
-            setShortlist((prev) =>
-              prev.some((c) => c.domain === e.candidate.domain)
-                ? prev
-                : [...prev, e.candidate].sort((a, b) => b.score - a.score),
-            );
-          } else if (e.type === "usage") {
-            setUsage(e.usage);
-            setProgress({ iteration: e.iteration, max: e.maxIterations });
-          } else if (e.type === "done") setFinished(e.reason);
-          else if (e.type === "error") setError(e.message);
-        }
-      }
+      id = json.runId;
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : "Agent failed.");
-    } finally {
-      if (flushRef.current) window.clearInterval(flushRef.current);
-      flushRef.current = null;
-      setLog([...logRef.current]);
-      setRunning(false);
+      setError(e instanceof Error ? e.message : "Agent failed to start.");
+      return;
     }
-  }, [useCase, capPrice, maxPrice, cats, seeds, depth, code, push]);
+
+    void refreshHistory();
+    await openRun(id);
+  }, [useCase, capPrice, maxPrice, cats, seeds, depth, code, openRun, refreshHistory]);
+
+  const stop = useCallback(async () => {
+    if (runId) {
+      await fetch(api(`/api/agent/stop?id=${encodeURIComponent(runId)}`), {
+        method: "POST",
+        headers: authHeaders(),
+      }).catch(() => {});
+    }
+  }, [runId, authHeaders]);
 
   useEffect(() => {
     if (running) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [log, running]);
+
+  // Loaded once on mount; every run refreshes it again on its own.
+  useEffect(() => {
+    let alive = true;
+    fetch(api("/api/agent"), {
+      headers: { "x-agent-code": window.localStorage.getItem(CODE_KEY) ?? "" },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => alive && j?.runs && setHistory(j.runs as RunSummary[]))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const budgetLabel = formatPrice(maxPrice, currency, rates) ?? `$${maxPrice}`;
 
@@ -294,7 +404,7 @@ export default function AgentPanel({
             <div className="ml-auto flex gap-2">
               {running && (
                 <button
-                  onClick={() => abortRef.current?.abort()}
+                  onClick={() => void stop()}
                   className="rounded-xl border border-edge px-4 py-2 text-sm text-muted transition hover:text-fg"
                 >
                   Stop
@@ -321,7 +431,14 @@ export default function AgentPanel({
           <section className="rounded-2xl border border-edge bg-panel/50">
             <div className="flex items-center justify-between border-b border-edge-soft px-4 py-2">
               <span className="text-xs text-muted">
-                {finished ? `Done — ${finished}` : `Step ${progress.iteration}/${progress.max || "…"}`}
+                {finished
+                  ? `Done — ${finished}`
+                  : `Step ${progress.iteration}/${progress.max || "…"}`}
+                {reconnecting && (
+                  <span className="ml-2 text-warn">
+                    connection dropped — the run continues on the server, reattaching…
+                  </span>
+                )}
               </span>
               <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted">
                 <input
@@ -360,6 +477,42 @@ export default function AgentPanel({
       </div>
 
       <aside className="space-y-3">
+        {history.length > 0 && (
+          <div className="rounded-2xl border border-edge bg-panel/70 p-4">
+            <h2 className="text-sm font-medium">My searches</h2>
+            <ul className="mt-2 space-y-1">
+              {history.map((h) => (
+                <li key={h.id}>
+                  <button
+                    onClick={() => void openRun(h.id)}
+                    className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${
+                      h.id === runId
+                        ? "border-brand/60 bg-brand/10"
+                        : "border-transparent hover:border-edge hover:bg-panel-2/60"
+                    }`}
+                  >
+                    <span className="block truncate text-xs">{h.title}</span>
+                    <span className="mt-0.5 block font-mono text-[10px] text-muted">
+                      {new Date(h.startedAt).toLocaleString("en-GB", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                      {" · "}
+                      {h.candidates} found
+                      {h.costUsd !== undefined && ` · $${h.costUsd.toFixed(2)}`}
+                      {h.status === "running" && " · running"}
+                      {h.status === "interrupted" && " · interrupted"}
+                      {h.status === "stopped" && " · stopped"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="rounded-2xl border border-edge bg-panel/70 p-4">
           <h2 className="text-sm font-medium">
             Shortlist{" "}

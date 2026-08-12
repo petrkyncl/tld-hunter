@@ -42,6 +42,12 @@ burn an API balance:
   a tool returns is re-sent on every subsequent turn, so verbose results are
   the most expensive mistake a harness can make.
 
+A run belongs to the server, not to the browser tab that started it. Starting
+one returns an id; the client then attaches to its event stream and can
+reattach at any point — after a dropped connection, a reload, or tomorrow.
+Losing your wifi costs you the live view and nothing else, and every past
+search stays in **My searches**, replayable in full.
+
 The depth selector maps to effort, task budget, and an iteration cap; the panel
 shows live spend so a run can never surprise you. Requires `ANTHROPIC_API_KEY`
 — without it the sweep still works and the agent says what is missing.
